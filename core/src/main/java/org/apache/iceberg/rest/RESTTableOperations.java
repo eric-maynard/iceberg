@@ -20,7 +20,6 @@ package org.apache.iceberg.rest;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -173,11 +172,7 @@ class RESTTableOperations implements TableOperations {
     // LoadTableResponse is used to deserialize the response, but config is not allowed by the REST
     // spec so it can be
     // safely ignored. there is no requirement to update config on refresh or commit.
-    if (current == null
-        || !Objects.equals(current.metadataFileLocation(), response.metadataLocation())) {
-      this.current = response.tableMetadata();
-    }
-
+    this.current = response.tableMetadata();
     return current;
   }
 
