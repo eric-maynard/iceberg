@@ -877,7 +877,8 @@ public class SparkCatalog extends BaseCatalog {
                 .collect(Collectors.toList());
 
         var scalaMap = (scala.collection.immutable.Map<String, String>)
-                scala.collection.immutable.Map$.MODULE$.apply(JavaConverters.asScalaIteratorConverter(propertyTuples.iterator()).asScala().toSeq());
+                scala.collection.immutable.Map$.MODULE$.apply(JavaConverters
+                        .asScalaIteratorConverter(propertyTuples.iterator()).asScala().toSeq());
         CatalogStorageFormat catalogStorageFormat = new CatalogStorageFormat(
                 scala.Option.<java.net.URI>empty(),
                 scala.Option.<String>empty(),
