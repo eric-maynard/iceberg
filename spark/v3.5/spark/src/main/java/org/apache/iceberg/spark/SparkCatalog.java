@@ -21,7 +21,10 @@ package org.apache.iceberg.spark;
 import static org.apache.iceberg.TableProperties.GC_ENABLED;
 import static org.apache.iceberg.TableProperties.GC_ENABLED_DEFAULT;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -30,6 +33,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.CachingCatalog;
@@ -61,7 +65,6 @@ import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.spark.actions.SparkActions;
-import org.apache.iceberg.spark.source.PolarisTable;
 import org.apache.iceberg.spark.source.SparkChangelogTable;
 import org.apache.iceberg.spark.source.SparkTable;
 import org.apache.iceberg.spark.source.SparkView;
@@ -77,6 +80,11 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException;
+import org.apache.spark.sql.catalyst.catalog.BucketSpec;
+import org.apache.spark.sql.catalyst.catalog.CatalogStatistics;
+import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat;
+import org.apache.spark.sql.catalyst.catalog.CatalogTable;
+import org.apache.spark.sql.catalyst.catalog.CatalogTableType;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
@@ -94,6 +102,9 @@ import org.apache.spark.sql.connector.catalog.ViewChange;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
+import scala.Tuple2;
+import scala.collection.JavaConversions;
+import scala.collection.JavaConverters;
 
 /**
  * A Spark TableCatalog implementation that wraps an Iceberg {@link Catalog}.
@@ -856,19 +867,65 @@ public class SparkCatalog extends BaseCatalog {
           String branch,
           Long snapshotId,
           boolean refreshEagerly) {
-    final String virtualFormatKey = PolarisTable.POLARIS_PROPERTY_PREFIX + ".format";
-    /* Check if this is actually a non-Iceberg table served by Polaris */
-    if (table.properties().containsKey(virtualFormatKey)) {
-      return new PolarisTable(table.name(), table.properties());
-    } else {
-      /* Fall back to a regular Iceberg table */
-      if (branch != null) {
-        return new SparkTable(table, branch, refreshEagerly);
-      } else if (snapshotId != null) {
-        return new SparkTable(table, snapshotId, refreshEagerly);
+    try {
+      final String virtualFormatKey = "_source";
+      /* Check if this is actually a non-Iceberg table served by Polaris */
+      if (table.properties().containsKey(virtualFormatKey)) {
+
+        List<Tuple2<String, String>> propertyTuples = table.properties().entrySet().stream()
+                .map(e -> Tuple2.apply(e.getKey(), e.getValue()))
+                .collect(Collectors.toList());
+
+        var scalaMap = (scala.collection.immutable.Map<String, String>)
+                scala.collection.immutable.Map$.MODULE$.apply(JavaConverters.asScalaIteratorConverter(propertyTuples.iterator()).asScala().toSeq());
+        CatalogStorageFormat catalogStorageFormat = new CatalogStorageFormat(
+                scala.Option.<java.net.URI>empty(),
+                scala.Option.<String>empty(),
+                scala.Option.<String>empty(),
+                scala.Option.<String>empty(),
+                false,
+                scalaMap
+        );
+
+        CatalogTable catalogTable = new CatalogTable(
+                new org.apache.spark.sql.catalyst.TableIdentifier(table.name()), // identifier
+                CatalogTableType.EXTERNAL(), // tableType
+                catalogStorageFormat, // storage
+                SparkSchemaUtil.convert(table.schema()),
+                scala.Option.<String>apply(table.properties().get(virtualFormatKey)), // provider
+                JavaConverters.<String>asScalaIterator(Collections.emptyIterator()).toSeq(),
+                scala.Option$.MODULE$.<BucketSpec>empty(),
+                "",
+                System.currentTimeMillis(),
+                System.currentTimeMillis(),
+                "",
+                scalaMap,
+                scala.Option$.MODULE$.<CatalogStatistics>empty(),
+                scala.Option$.MODULE$.<String>empty(),
+                scala.Option$.MODULE$.<String>empty(),
+                JavaConverters.<String>asScalaIterator(Collections.emptyIterator()).toSeq(),
+                false,
+                true,
+                scalaMap,
+                scala.Option$.MODULE$.<String>empty()
+        );
+
+        return (Table) Class.forName("org.apache.spark.sql.connector.catalog.V1Table")
+                .getDeclaredConstructor(CatalogTable.class)
+                .newInstance(catalogTable);
       } else {
-        return new SparkTable(table, refreshEagerly);
+        /* Fall back to a regular Iceberg table */
+        if (branch != null) {
+          return new SparkTable(table, branch, refreshEagerly);
+        } else if (snapshotId != null) {
+          return new SparkTable(table, snapshotId, refreshEagerly);
+        } else {
+          return new SparkTable(table, refreshEagerly);
+        }
       }
+    } catch (Exception e) {
+      System.out.println("[SNOWVATION] Swallowed error:" + e);
+      return null;
     }
   }
 
