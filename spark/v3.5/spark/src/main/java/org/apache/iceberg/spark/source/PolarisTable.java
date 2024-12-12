@@ -43,10 +43,12 @@ public class PolarisTable
   private final String name;
   private final Map<String, String> properties;
   private final Dataset<Row> df;
+  private final SparkTable sparkTable;
 
-  public PolarisTable(String name, Map<String, String> properties) {
+  public PolarisTable(String name, Map<String, String> properties, SparkTable sparkTable) {
     this.name = name;
     this.properties = properties;
+    this.sparkTable = sparkTable;
 
     org.apache.spark.sql.SparkSession spark =
         org.apache.spark.sql.SparkSession.getActiveSession().get();
@@ -63,7 +65,7 @@ public class PolarisTable
 
   @Override
   public WriteBuilder newWriteBuilder(LogicalWriteInfo logicalWriteInfo) {
-    return new PolarisWriteBuilder(this.properties, logicalWriteInfo);
+    return sparkTable.newWriteBuilder(logicalWriteInfo);
   }
 
   @Override
@@ -104,60 +106,6 @@ public class PolarisTable
     @Override
     public StructType readSchema() {
       return df.schema();
-    }
-  }
-
-  public static class PolarisWriteBuilder implements WriteBuilder {
-    private final Map<String, String> properties;
-    private final LogicalWriteInfo logicalWriteInfo;
-    private final SparkSession spark;
-
-    public PolarisWriteBuilder(Map<String, String> properties, LogicalWriteInfo logicalWriteInfo) {
-      this.properties = properties;
-      this.logicalWriteInfo = logicalWriteInfo;
-      this.spark = SparkSession.builder().getOrCreate();
-    }
-
-    @Override
-    public Write build() {
-      return getWriteImplementation(this.properties.get("format"), this.properties);
-    }
-
-    public Write getWriteImplementation(String format, Map<String, String> options) {
-      try {
-        String className = normalizeFormat(format) + "Write";
-        Class<?> writeClass =
-            tryLoadClass("org.apache.spark.sql.execution.datasources.v2." + className);
-        if (writeClass == null) {
-          writeClass = tryLoadClass("org.apache.spark.sql.sources." + className);
-        }
-        if (writeClass == null) {
-          throw new UnsupportedOperationException(
-              "No Write implementation found for format: " + format);
-        }
-        if (!Write.class.isAssignableFrom(writeClass)) {
-          throw new UnsupportedOperationException(
-              className + " does not implement Write interface.");
-        }
-        Constructor<?> constructor = writeClass.getConstructor(SparkSession.class, Map.class);
-        return (Write) constructor.newInstance(spark, options);
-
-      } catch (Exception e) {
-        throw new UnsupportedOperationException(
-            "Error loading Write implementation for format: " + format, e);
-      }
-    }
-
-    private String normalizeFormat(String format) {
-      return format.substring(0, 1).toUpperCase() + format.substring(1);
-    }
-
-    private Class<?> tryLoadClass(String className) {
-      try {
-        return Class.forName(className);
-      } catch (ClassNotFoundException e) {
-        return null;
-      }
     }
   }
 }
