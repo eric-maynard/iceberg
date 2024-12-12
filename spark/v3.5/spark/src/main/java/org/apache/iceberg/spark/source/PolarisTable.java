@@ -20,11 +20,8 @@ package org.apache.iceberg.spark.source;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import org.apache.spark.rdd.RDD;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -92,51 +89,77 @@ public class PolarisTable
   }
 
   public static class PolarisScanBuilder implements ScanBuilder {
-    private final org.apache.spark.sql.Dataset<Row> df;
+    private final org.apache.spark.sql.Dataset<?> df;
 
-    public PolarisScanBuilder(org.apache.spark.sql.Dataset<Row> df) {
+    public PolarisScanBuilder(org.apache.spark.sql.Dataset<?> df) {
       this.df = df;
     }
 
     @Override
     public Scan build() {
-      return new Scan() {
+      // TODO this is definitely not the right way to do this.
+      final java.util.Iterator<Row> iterator = (java.util.Iterator<Row>)df.toLocalIterator();
+      return new PolarisScan(df.schema(), iterator);
+    }
+  }
 
+  public static class PolarisScan implements Scan, Serializable {
+    private final StructType schema;
+    private final java.util.Iterator<Row> iterator;
+
+    public PolarisScan(
+            StructType schema,
+            java.util.Iterator<Row> iterator) {
+      this.schema = schema;
+      this.iterator = iterator;
+    }
+
+    @Override
+    public StructType readSchema() {
+      return this.schema;
+    }
+
+    @Override
+    public Batch toBatch() {
+
+      return new Batch() {
         @Override
-        public StructType readSchema() {
-          return df.schema();
+        public InputPartition[] planInputPartitions() {
+          return new InputPartition[] {new InputPartition() {}};
         }
 
         @Override
-        public Batch toBatch() {
-          return new Batch() {
+        public PartitionReaderFactory createReaderFactory() {
+          return new PartitionReaderFactory() {
             @Override
-            public InputPartition[] planInputPartitions() {
-              return new InputPartition[0];
-            }
+            public PartitionReader<InternalRow> createReader(InputPartition inputPartition) {
+              return new PartitionReader<InternalRow>() {
+                private Row currentRow = null;
 
-            @Override
-            public PartitionReaderFactory createReaderFactory() {
-              return new PartitionReaderFactory() {
                 @Override
-                public PartitionReader<InternalRow> createReader(int partitionId) {
-                  return new PartitionReader<InternalRow>() {
-                    private final Iterator<Row> iterator = df.collectAsList().iterator();
+                public void close() throws IOException {
+                  // no-op
+                }
 
-                    @Override
-                    public boolean next() {
-                      return iterator.hasNext();
-                    }
+                @Override
+                public boolean next() throws IOException {
+                  // Move to the next row in the iterator
+                  if (iterator.hasNext()) {
+                    currentRow = iterator.next();
+                    return true;
+                  } else {
+                    return false;
+                  }
+                }
 
-                    @Override
-                    public InternalRow get() {
-                      Row row = iterator.next();
-                      return InternalRow.fromSeq(row.toSeq());
-                    }
-
-                    @Override
-                    public void close() {}
-                  };
+                @Override
+                public InternalRow get() {
+                  // Convert the Row to an InternalRow
+                  Object[] values = new Object[currentRow.length()];
+                  for (int i = 0; i < currentRow.length(); i++) {
+                    values[i] = currentRow.get(i);
+                  }
+                  return new GenericInternalRow(values);
                 }
               };
             }
