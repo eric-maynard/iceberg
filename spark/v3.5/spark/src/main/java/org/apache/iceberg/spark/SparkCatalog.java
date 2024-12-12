@@ -851,7 +851,7 @@ public class SparkCatalog extends BaseCatalog {
   }
 
   private SparkTable buildSparkTableImpl(
-          org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
     /* Fall back to a regular Iceberg table */
     if (branch != null) {
       return new SparkTable(table, branch, refreshEagerly);
@@ -869,7 +869,9 @@ public class SparkCatalog extends BaseCatalog {
     if (table.properties().containsKey(PolarisTable.POLARIS_SOURCE_PROPERTY)) {
       System.out.println("#### Loading Polaris table");
       return new PolarisTable(
-              table.name(), table.properties(), buildSparkTableImpl(table, branch, snapshotId, refreshEagerly));
+          table.name(),
+          table.properties(),
+          buildSparkTableImpl(table, branch, snapshotId, refreshEagerly));
     } else {
       return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
     }

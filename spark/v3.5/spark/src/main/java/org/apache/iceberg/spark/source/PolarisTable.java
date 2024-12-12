@@ -18,19 +18,23 @@
  */
 package org.apache.iceberg.spark.source;
 
-import java.lang.reflect.Constructor;
+import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
-import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.catalyst.InternalRow;
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.connector.catalog.SupportsRead;
 import org.apache.spark.sql.connector.catalog.SupportsWrite;
 import org.apache.spark.sql.connector.catalog.TableCapability;
+import org.apache.spark.sql.connector.read.Batch;
+import org.apache.spark.sql.connector.read.InputPartition;
+import org.apache.spark.sql.connector.read.PartitionReader;
+import org.apache.spark.sql.connector.read.PartitionReaderFactory;
 import org.apache.spark.sql.connector.read.Scan;
 import org.apache.spark.sql.connector.read.ScanBuilder;
 import org.apache.spark.sql.connector.write.LogicalWriteInfo;
-import org.apache.spark.sql.connector.write.Write;
 import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -106,6 +110,51 @@ public class PolarisTable
     @Override
     public StructType readSchema() {
       return df.schema();
+    }
+
+    @Override
+    public Batch toBatch() {
+      // Return the dataset as a batch for processing
+      return new Batch() {
+        @Override
+        public InputPartition[] planInputPartitions() {
+          return new InputPartition[0];
+        }
+
+        @Override
+        public PartitionReaderFactory createReaderFactory() {
+          return new PartitionReaderFactory() {
+            @Override
+            public PartitionReader<InternalRow> createReader(InputPartition inputPartition) {
+              return new PartitionReader<InternalRow>() {
+                // TODO this is not right
+                private final java.util.Iterator<Row> iterator =
+                    (java.util.Iterator<Row>) df.collectAsList().iterator();
+
+                @Override
+                public void close() throws IOException {
+                  df.unpersist();
+                }
+
+                @Override
+                public boolean next() throws IOException {
+                  return iterator.hasNext();
+                }
+
+                @Override
+                public InternalRow get() {
+                  Row row = iterator.next();
+                  Object[] values = new Object[row.length()];
+                  for (int i = 0; i < row.length(); i++) {
+                    values[i] = row.get(i);
+                  }
+                  return new GenericInternalRow(values);
+                }
+              };
+            }
+          };
+        }
+      };
     }
   }
 }
