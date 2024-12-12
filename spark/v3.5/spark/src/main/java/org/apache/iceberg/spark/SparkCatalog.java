@@ -80,10 +80,7 @@ import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
-import org.apache.spark.sql.connector.catalog.SupportsRead;
-import org.apache.spark.sql.connector.catalog.SupportsWrite;
 import org.apache.spark.sql.connector.catalog.Table;
-import org.apache.spark.sql.connector.catalog.TableCapability;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.catalog.TableChange;
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnChange;
@@ -843,22 +840,22 @@ public class SparkCatalog extends BaseCatalog {
     return buildSparkTable(table, null, null, refreshEagerly);
   }
 
-  private Table buildSparkTable(org.apache.iceberg.Table table, String branch, boolean refreshEagerly) {
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, String branch, boolean refreshEagerly) {
     return buildSparkTable(table, branch, null, refreshEagerly);
   }
 
-  private Table buildSparkTable(org.apache.iceberg.Table table, Long snapshotId, boolean refreshEagerly) {
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, Long snapshotId, boolean refreshEagerly) {
     return buildSparkTable(table, null, snapshotId, refreshEagerly);
   }
 
+  @SuppressWarnings("BanSystemOut")
   private Table buildSparkTable(
-          org.apache.iceberg.Table table,
-          String branch,
-          Long snapshotId,
-          boolean refreshEagerly) {
-    final String virtualFormatKey = PolarisTable.POLARIS_PROPERTY_PREFIX + ".format";
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
     /* Check if this is actually a non-Iceberg table served by Polaris */
-    if (table.properties().containsKey(virtualFormatKey)) {
+    if (table.properties().containsKey(PolarisTable.POLARIS_SOURCE_PROPERTY)) {
+      System.out.println("#### Loading Polaris table");
       return new PolarisTable(table.name(), table.properties());
     } else {
       /* Fall back to a regular Iceberg table */
