@@ -19,8 +19,12 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.IOException;
+import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.apache.spark.rdd.RDD;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -88,67 +92,51 @@ public class PolarisTable
   }
 
   public static class PolarisScanBuilder implements ScanBuilder {
-    private final org.apache.spark.sql.Dataset<?> df;
+    private final org.apache.spark.sql.Dataset<Row> df;
 
-    public PolarisScanBuilder(org.apache.spark.sql.Dataset<?> df) {
+    public PolarisScanBuilder(org.apache.spark.sql.Dataset<Row> df) {
       this.df = df;
     }
 
     @Override
     public Scan build() {
-      return new PolarisScan(this.df);
-    }
-  }
+      return new Scan() {
 
-  public static class PolarisScan implements Scan {
-    private final org.apache.spark.sql.Dataset<?> df;
-
-    public PolarisScan(org.apache.spark.sql.Dataset<?> df) {
-      this.df = df;
-    }
-
-    @Override
-    public StructType readSchema() {
-      return df.schema();
-    }
-
-    @Override
-    public Batch toBatch() {
-      // Return the dataset as a batch for processing
-      return new Batch() {
         @Override
-        public InputPartition[] planInputPartitions() {
-          return new InputPartition[0];
+        public StructType readSchema() {
+          return df.schema();
         }
 
         @Override
-        public PartitionReaderFactory createReaderFactory() {
-          return new PartitionReaderFactory() {
+        public Batch toBatch() {
+          return new Batch() {
             @Override
-            public PartitionReader<InternalRow> createReader(InputPartition inputPartition) {
-              return new PartitionReader<InternalRow>() {
-                // TODO this is not right
-                private final java.util.Iterator<Row> iterator =
-                    (java.util.Iterator<Row>) df.collectAsList().iterator();
+            public InputPartition[] planInputPartitions() {
+              return new InputPartition[0];
+            }
 
+            @Override
+            public PartitionReaderFactory createReaderFactory() {
+              return new PartitionReaderFactory() {
                 @Override
-                public void close() throws IOException {
-                  df.unpersist();
-                }
+                public PartitionReader<InternalRow> createReader(int partitionId) {
+                  return new PartitionReader<InternalRow>() {
+                    private final Iterator<Row> iterator = df.collectAsList().iterator();
 
-                @Override
-                public boolean next() throws IOException {
-                  return iterator.hasNext();
-                }
+                    @Override
+                    public boolean next() {
+                      return iterator.hasNext();
+                    }
 
-                @Override
-                public InternalRow get() {
-                  Row row = iterator.next();
-                  Object[] values = new Object[row.length()];
-                  for (int i = 0; i < row.length(); i++) {
-                    values[i] = row.get(i);
-                  }
-                  return new GenericInternalRow(values);
+                    @Override
+                    public InternalRow get() {
+                      Row row = iterator.next();
+                      return InternalRow.fromSeq(row.toSeq());
+                    }
+
+                    @Override
+                    public void close() {}
+                  };
                 }
               };
             }
