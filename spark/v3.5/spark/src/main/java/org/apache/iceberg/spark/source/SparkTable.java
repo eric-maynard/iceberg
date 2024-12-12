@@ -98,7 +98,6 @@ public class SparkTable
           "provider",
           "format",
           CURRENT_SNAPSHOT_ID,
-          "location",
           FORMAT_VERSION,
           "sort-order",
           "identifier-fields");

@@ -21,10 +21,8 @@ package org.apache.iceberg.spark;
 import static org.apache.iceberg.TableProperties.GC_ENABLED;
 import static org.apache.iceberg.TableProperties.GC_ENABLED_DEFAULT;
 
-import java.lang.reflect.InvocationTargetException;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -88,10 +86,7 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTableType;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
-import org.apache.spark.sql.connector.catalog.SupportsRead;
-import org.apache.spark.sql.connector.catalog.SupportsWrite;
 import org.apache.spark.sql.connector.catalog.Table;
-import org.apache.spark.sql.connector.catalog.TableCapability;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.catalog.TableChange;
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnChange;
@@ -103,7 +98,6 @@ import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 import scala.Tuple2;
-import scala.collection.JavaConversions;
 import scala.collection.JavaConverters;
 
 /**
@@ -854,41 +848,46 @@ public class SparkCatalog extends BaseCatalog {
     return buildSparkTable(table, null, null, refreshEagerly);
   }
 
-  private Table buildSparkTable(org.apache.iceberg.Table table, String branch, boolean refreshEagerly) {
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, String branch, boolean refreshEagerly) {
     return buildSparkTable(table, branch, null, refreshEagerly);
   }
 
-  private Table buildSparkTable(org.apache.iceberg.Table table, Long snapshotId, boolean refreshEagerly) {
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, Long snapshotId, boolean refreshEagerly) {
     return buildSparkTable(table, null, snapshotId, refreshEagerly);
   }
 
+  @SuppressWarnings("checkstyle:BanSystemOut")
   private Table buildSparkTable(
-          org.apache.iceberg.Table table,
-          String branch,
-          Long snapshotId,
-          boolean refreshEagerly) {
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
     try {
       final String virtualFormatKey = "_source";
       /* Check if this is actually a non-Iceberg table served by Polaris */
       if (table.properties().containsKey(virtualFormatKey)) {
 
-        List<Tuple2<String, String>> propertyTuples = table.properties().entrySet().stream()
+        List<Tuple2<String, String>> propertyTuples =
+            table.properties().entrySet().stream()
                 .map(e -> Tuple2.apply(e.getKey(), e.getValue()))
                 .collect(Collectors.toList());
 
-        var scalaMap = (scala.collection.immutable.Map<String, String>)
-                scala.collection.immutable.Map$.MODULE$.apply(JavaConverters
-                        .asScalaIteratorConverter(propertyTuples.iterator()).asScala().toSeq());
-        CatalogStorageFormat catalogStorageFormat = new CatalogStorageFormat(
+        var scalaMap =
+            (scala.collection.immutable.Map<String, String>)
+                scala.collection.immutable.Map$.MODULE$.apply(
+                    JavaConverters.asScalaIteratorConverter(propertyTuples.iterator())
+                        .asScala()
+                        .toSeq());
+        CatalogStorageFormat catalogStorageFormat =
+            new CatalogStorageFormat(
                 scala.Option.<java.net.URI>empty(),
                 scala.Option.<String>empty(),
                 scala.Option.<String>empty(),
                 scala.Option.<String>empty(),
                 false,
-                scalaMap
-        );
+                scalaMap);
 
-        CatalogTable catalogTable = new CatalogTable(
+        CatalogTable catalogTable =
+            new CatalogTable(
                 new org.apache.spark.sql.catalyst.TableIdentifier(table.name()), // identifier
                 CatalogTableType.EXTERNAL(), // tableType
                 catalogStorageFormat, // storage
@@ -908,10 +907,10 @@ public class SparkCatalog extends BaseCatalog {
                 false,
                 true,
                 scalaMap,
-                scala.Option$.MODULE$.<String>empty()
-        );
+                scala.Option$.MODULE$.<String>empty());
 
-        return (Table) Class.forName("org.apache.spark.sql.connector.catalog.V1Table")
+        return (Table)
+            Class.forName("org.apache.spark.sql.connector.catalog.V1Table")
                 .getDeclaredConstructor(CatalogTable.class)
                 .newInstance(catalogTable);
       } else {
