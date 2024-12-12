@@ -874,7 +874,6 @@ public class SparkCatalog extends BaseCatalog {
       if (table.properties().containsKey(virtualFormatKey)) {
         String format = table.properties().get(virtualFormatKey);
 
-        System.out.println("Looking up implementation for format: " + format);
         SQLConf sqlConf = SQLConf.get();
         TableProvider provider = DataSource.lookupDataSourceV2(format, sqlConf).get();
         return DataSourceV2Utils.getTableFromProvider(
