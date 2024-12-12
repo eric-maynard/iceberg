@@ -95,6 +95,9 @@ import org.apache.spark.sql.connector.catalog.TableChange.SetProperty;
 import org.apache.spark.sql.connector.catalog.View;
 import org.apache.spark.sql.connector.catalog.ViewChange;
 import org.apache.spark.sql.connector.expressions.Transform;
+import org.apache.spark.sql.execution.datasources.v2.FileDataSourceV2;
+import org.apache.spark.sql.execution.datasources.v2.FileDataSourceV2$;
+import org.apache.spark.sql.execution.datasources.v2.csv.CSVDataSourceV2;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 import scala.Tuple2;
@@ -858,6 +861,18 @@ public class SparkCatalog extends BaseCatalog {
     return buildSparkTable(table, null, snapshotId, refreshEagerly);
   }
 
+  private Table buildSparkTableImpl(
+          org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
+    /* Fall back to a regular Iceberg table */
+    if (branch != null) {
+      return new SparkTable(table, branch, refreshEagerly);
+    } else if (snapshotId != null) {
+      return new SparkTable(table, snapshotId, refreshEagerly);
+    } else {
+      return new SparkTable(table, refreshEagerly);
+    }
+  }
+
   @SuppressWarnings("checkstyle:BanSystemOut")
   private Table buildSparkTable(
       org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
@@ -865,63 +880,16 @@ public class SparkCatalog extends BaseCatalog {
       final String virtualFormatKey = "_source";
       /* Check if this is actually a non-Iceberg table served by Polaris */
       if (table.properties().containsKey(virtualFormatKey)) {
+        String format = table.properties().get(virtualFormatKey);
+        var csvDataSource = new CSVDataSourceV2();
 
-        List<Tuple2<String, String>> propertyTuples =
-            table.properties().entrySet().stream()
-                .map(e -> Tuple2.apply(e.getKey(), e.getValue()))
-                .collect(Collectors.toList());
-
-        var scalaMap =
-            (scala.collection.immutable.Map<String, String>)
-                scala.collection.immutable.Map$.MODULE$.apply(
-                    JavaConverters.asScalaIteratorConverter(propertyTuples.iterator())
-                        .asScala()
-                        .toSeq());
-        CatalogStorageFormat catalogStorageFormat =
-            new CatalogStorageFormat(
-                scala.Option.<java.net.URI>empty(),
-                scala.Option.<String>empty(),
-                scala.Option.<String>empty(),
-                scala.Option.<String>empty(),
-                false,
-                scalaMap);
-
-        CatalogTable catalogTable =
-            new CatalogTable(
-                new org.apache.spark.sql.catalyst.TableIdentifier(table.name()), // identifier
-                CatalogTableType.EXTERNAL(), // tableType
-                catalogStorageFormat, // storage
-                SparkSchemaUtil.convert(table.schema()),
-                scala.Option.<String>apply(table.properties().get(virtualFormatKey)), // provider
-                JavaConverters.<String>asScalaIterator(Collections.emptyIterator()).toSeq(),
-                scala.Option$.MODULE$.<BucketSpec>empty(),
-                "",
-                System.currentTimeMillis(),
-                System.currentTimeMillis(),
-                "",
-                scalaMap,
-                scala.Option$.MODULE$.<CatalogStatistics>empty(),
-                scala.Option$.MODULE$.<String>empty(),
-                scala.Option$.MODULE$.<String>empty(),
-                JavaConverters.<String>asScalaIterator(Collections.emptyIterator()).toSeq(),
-                false,
-                true,
-                scalaMap,
-                scala.Option$.MODULE$.<String>empty());
-
-        return (Table)
-            Class.forName("org.apache.spark.sql.connector.catalog.V1Table")
-                .getDeclaredConstructor(CatalogTable.class)
-                .newInstance(catalogTable);
-      } else {
-        /* Fall back to a regular Iceberg table */
-        if (branch != null) {
-          return new SparkTable(table, branch, refreshEagerly);
-        } else if (snapshotId != null) {
-          return new SparkTable(table, snapshotId, refreshEagerly);
+        if (format.equals(csvDataSource.shortName())) {
+          return csvDataSource.getTable(new CaseInsensitiveStringMap(table.properties()));
         } else {
-          return new SparkTable(table, refreshEagerly);
+          return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
         }
+      } else {
+        return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
       }
     } catch (Exception e) {
       System.out.println("[SNOWVATION] Swallowed error:" + e);
