@@ -22,7 +22,6 @@ import static org.apache.iceberg.TableProperties.GC_ENABLED;
 import static org.apache.iceberg.TableProperties.GC_ENABLED_DEFAULT;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -31,7 +30,6 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.CachingCatalog;
@@ -78,11 +76,6 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException;
-import org.apache.spark.sql.catalyst.catalog.BucketSpec;
-import org.apache.spark.sql.catalyst.catalog.CatalogStatistics;
-import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat;
-import org.apache.spark.sql.catalyst.catalog.CatalogTable;
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.NamespaceChange;
 import org.apache.spark.sql.connector.catalog.StagedTable;
@@ -92,16 +85,15 @@ import org.apache.spark.sql.connector.catalog.TableChange;
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnChange;
 import org.apache.spark.sql.connector.catalog.TableChange.RemoveProperty;
 import org.apache.spark.sql.connector.catalog.TableChange.SetProperty;
+import org.apache.spark.sql.connector.catalog.TableProvider;
 import org.apache.spark.sql.connector.catalog.View;
 import org.apache.spark.sql.connector.catalog.ViewChange;
 import org.apache.spark.sql.connector.expressions.Transform;
-import org.apache.spark.sql.execution.datasources.v2.FileDataSourceV2;
-import org.apache.spark.sql.execution.datasources.v2.FileDataSourceV2$;
-import org.apache.spark.sql.execution.datasources.v2.csv.CSVDataSourceV2;
+import org.apache.spark.sql.execution.datasources.DataSource;
+import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Utils;
+import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
-import scala.Tuple2;
-import scala.collection.JavaConverters;
 
 /**
  * A Spark TableCatalog implementation that wraps an Iceberg {@link Catalog}.
@@ -256,7 +248,7 @@ public class SparkCatalog extends BaseCatalog {
               .withLocation(properties.get("location"))
               .withProperties(Spark3Util.rebuildCreateProperties(properties))
               .create();
-      return buildSparkTable(icebergTable, !cacheEnabled);
+      return new SparkTable(icebergTable, !cacheEnabled);
     } catch (AlreadyExistsException e) {
       throw new TableAlreadyExistsException(ident);
     }
@@ -862,7 +854,7 @@ public class SparkCatalog extends BaseCatalog {
   }
 
   private Table buildSparkTableImpl(
-          org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
     /* Fall back to a regular Iceberg table */
     if (branch != null) {
       return new SparkTable(table, branch, refreshEagerly);
@@ -881,18 +873,22 @@ public class SparkCatalog extends BaseCatalog {
       /* Check if this is actually a non-Iceberg table served by Polaris */
       if (table.properties().containsKey(virtualFormatKey)) {
         String format = table.properties().get(virtualFormatKey);
-        var csvDataSource = new CSVDataSourceV2();
 
-        if (format.equals(csvDataSource.shortName())) {
-          return csvDataSource.getTable(new CaseInsensitiveStringMap(table.properties()));
-        } else {
-          return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
-        }
+        System.out.println("Looking up implementation for format: " + format);
+        SQLConf sqlConf = SQLConf.get();
+        TableProvider provider = DataSource.lookupDataSourceV2(format, sqlConf).get();
+        return DataSourceV2Utils.getTableFromProvider(
+            provider,
+            new CaseInsensitiveStringMap(table.properties()),
+            scala.Option$.MODULE$.<StructType>empty());
       } else {
         return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
       }
     } catch (Exception e) {
       System.out.println("[SNOWVATION] Swallowed error:" + e);
+      for (var elem : e.getStackTrace()) {
+        System.out.println("[SNOWVATION]     " + elem.toString());
+      }
       return null;
     }
   }
