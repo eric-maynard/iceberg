@@ -871,7 +871,7 @@ public class SparkCatalog extends BaseCatalog {
     try {
       final String virtualFormatKey = "_source";
       /* Check if this is actually a non-Iceberg table served by Polaris */
-      if (table.properties().containsKey(virtualFormatKey)) {
+      if (table.properties().getOrDefault(virtualFormatKey, null) != null) {
         String format = table.properties().get(virtualFormatKey);
 
         SQLConf sqlConf = SQLConf.get();
