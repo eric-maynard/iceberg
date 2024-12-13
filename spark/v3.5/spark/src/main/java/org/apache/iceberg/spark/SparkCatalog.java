@@ -888,7 +888,7 @@ public class SparkCatalog extends BaseCatalog {
       for (var elem : e.getStackTrace()) {
         System.out.println("[SNOWVATION]     " + elem.toString());
       }
-      return null;
+      return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
     }
   }
 
