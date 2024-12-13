@@ -85,9 +85,13 @@ import org.apache.spark.sql.connector.catalog.TableChange;
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnChange;
 import org.apache.spark.sql.connector.catalog.TableChange.RemoveProperty;
 import org.apache.spark.sql.connector.catalog.TableChange.SetProperty;
+import org.apache.spark.sql.connector.catalog.TableProvider;
 import org.apache.spark.sql.connector.catalog.View;
 import org.apache.spark.sql.connector.catalog.ViewChange;
 import org.apache.spark.sql.connector.expressions.Transform;
+import org.apache.spark.sql.execution.datasources.DataSource;
+import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Utils;
+import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
@@ -343,7 +347,7 @@ public class SparkCatalog extends BaseCatalog {
       org.apache.iceberg.Table table = icebergCatalog.loadTable(buildIdentifier(ident));
       commitChanges(
           table, setLocation, setSnapshotId, pickSnapshotId, propertyChanges, schemaChanges);
-      return new SparkTable(table, true /* refreshEagerly */);
+      return buildSparkTable(table, true /* refreshEagerly */);
     } catch (org.apache.iceberg.exceptions.NoSuchTableException e) {
       throw new NoSuchTableException(ident);
     }
@@ -835,6 +839,59 @@ public class SparkCatalog extends BaseCatalog {
     }
   }
 
+  private Table buildSparkTable(org.apache.iceberg.Table table, boolean refreshEagerly) {
+    return buildSparkTable(table, null, null, refreshEagerly);
+  }
+
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, String branch, boolean refreshEagerly) {
+    return buildSparkTable(table, branch, null, refreshEagerly);
+  }
+
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, Long snapshotId, boolean refreshEagerly) {
+    return buildSparkTable(table, null, snapshotId, refreshEagerly);
+  }
+
+  private Table buildSparkTableImpl(
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
+    /* Fall back to a regular Iceberg table */
+    if (branch != null) {
+      return new SparkTable(table, branch, refreshEagerly);
+    } else if (snapshotId != null) {
+      return new SparkTable(table, snapshotId, refreshEagerly);
+    } else {
+      return new SparkTable(table, refreshEagerly);
+    }
+  }
+
+  @SuppressWarnings("checkstyle:BanSystemOut")
+  private Table buildSparkTable(
+      org.apache.iceberg.Table table, String branch, Long snapshotId, boolean refreshEagerly) {
+    try {
+      final String virtualFormatKey = "_source";
+      /* Check if this is actually a non-Iceberg table served by Polaris */
+      if (table.properties().getOrDefault(virtualFormatKey, null) != null) {
+        String format = table.properties().get(virtualFormatKey);
+
+        SQLConf sqlConf = SQLConf.get();
+        TableProvider provider = DataSource.lookupDataSourceV2(format, sqlConf).get();
+        return DataSourceV2Utils.getTableFromProvider(
+            provider,
+            new CaseInsensitiveStringMap(table.properties()),
+            scala.Option$.MODULE$.<StructType>empty());
+      } else {
+        return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
+      }
+    } catch (Exception e) {
+      System.out.println("[SNOWVATION] Swallowed error:" + e);
+      for (var elem : e.getStackTrace()) {
+        System.out.println("[SNOWVATION]     " + elem.toString());
+      }
+      return buildSparkTableImpl(table, branch, snapshotId, refreshEagerly);
+    }
+  }
+
   private Table load(Identifier ident) {
     if (isPathIdentifier(ident)) {
       return loadFromPathIdentifier((PathIdentifier) ident);
@@ -842,7 +899,7 @@ public class SparkCatalog extends BaseCatalog {
 
     try {
       org.apache.iceberg.Table table = icebergCatalog.loadTable(buildIdentifier(ident));
-      return new SparkTable(table, !cacheEnabled);
+      return buildSparkTable(table, !cacheEnabled);
 
     } catch (org.apache.iceberg.exceptions.NoSuchTableException e) {
       if (ident.namespace().length == 0) {
@@ -872,25 +929,25 @@ public class SparkCatalog extends BaseCatalog {
       if (at.matches()) {
         long asOfTimestamp = Long.parseLong(at.group(1));
         long snapshotId = SnapshotUtil.snapshotIdAsOfTime(table, asOfTimestamp);
-        return new SparkTable(table, snapshotId, !cacheEnabled);
+        return buildSparkTable(table, snapshotId, !cacheEnabled);
       }
 
       Matcher id = SNAPSHOT_ID.matcher(ident.name());
       if (id.matches()) {
         long snapshotId = Long.parseLong(id.group(1));
-        return new SparkTable(table, snapshotId, !cacheEnabled);
+        return buildSparkTable(table, snapshotId, !cacheEnabled);
       }
 
       Matcher branch = BRANCH.matcher(ident.name());
       if (branch.matches()) {
-        return new SparkTable(table, branch.group(1), !cacheEnabled);
+        return buildSparkTable(table, branch.group(1), !cacheEnabled);
       }
 
       Matcher tag = TAG.matcher(ident.name());
       if (tag.matches()) {
         Snapshot tagSnapshot = table.snapshot(tag.group(1));
         if (tagSnapshot != null) {
-          return new SparkTable(table, tagSnapshot.snapshotId(), !cacheEnabled);
+          return buildSparkTable(table, tagSnapshot.snapshotId(), !cacheEnabled);
         }
       }
 
@@ -977,19 +1034,19 @@ public class SparkCatalog extends BaseCatalog {
 
     } else if (asOfTimestamp != null) {
       long snapshotIdAsOfTime = SnapshotUtil.snapshotIdAsOfTime(table, asOfTimestamp);
-      return new SparkTable(table, snapshotIdAsOfTime, !cacheEnabled);
+      return buildSparkTable(table, snapshotIdAsOfTime, !cacheEnabled);
 
     } else if (branch != null) {
-      return new SparkTable(table, branch, !cacheEnabled);
+      return buildSparkTable(table, branch, !cacheEnabled);
 
     } else if (tag != null) {
       Snapshot tagSnapshot = table.snapshot(tag);
       Preconditions.checkArgument(
           tagSnapshot != null, "Cannot find snapshot associated with tag name: %s", tag);
-      return new SparkTable(table, tagSnapshot.snapshotId(), !cacheEnabled);
+      return buildSparkTable(table, tagSnapshot.snapshotId(), !cacheEnabled);
 
     } else {
-      return new SparkTable(table, snapshotId, !cacheEnabled);
+      return buildSparkTable(table, snapshotId, !cacheEnabled);
     }
   }
 
